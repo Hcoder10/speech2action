@@ -31,7 +31,7 @@ def build_scene() -> Path:
                    mass=0.03, friction=[1.2, 0.02, 0.001], condim=6, solimp=[0.95, 0.99, 0.001, 0.5, 2],
                    solref=[0.004, 1])
         b.gravcomp = 1e-9
-    cam = spec.worldbody.add_camera(name="demo", pos=[0.62, -0.30, 0.42], fovy=48)
+    cam = spec.worldbody.add_camera(name="demo", pos=[0.70, 0.0, 0.50], fovy=48)   # facing the arm: screen left = "left"
     cam.targetbody = "shoulder"
     cam.mode = mujoco.mjtCamLight.mjCAMLIGHT_TARGETBODY
     spec.compile()
