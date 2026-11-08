@@ -48,3 +48,10 @@ def test_multistep():
 def test_put_back():
     assert run(tok("Sure, putting the green cube back where it came from.")) == ["place where=origin"]
     assert run(tok("Putting it at the back.")) == ["place where=back"]
+
+
+def test_live_phrasings():
+    assert run(tok("Sure, moving the green cube to the right.")) == ["place where=right"]
+    assert run(tok("Okay, moving the blue one into the bowl.")) == ["place where=bowl"]
+    assert run(tok("Sure thing, moving a bit to the left.")) == ["nudge dir=left amount=0.025"]
+    assert run(tok("Moving the red cube.")) == ["point obj=red"]

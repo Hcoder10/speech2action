@@ -18,7 +18,7 @@ COLOR_ALIASES = {"reds": "red", "read": "red", "blues": "blue", "greens": "green
 
 PICK = {"pick", "picking", "grab", "grabbing", "grabs", "take", "taking", "get", "getting", "lift", "lifting",
         "grasp", "grasping", "fetch", "fetching", "pickup"}
-PLACE = {"put", "putting", "place", "placing", "drop", "dropping", "set", "setting", "toss", "tossing", "stack",
+PLACE = {"put", "putting", "place", "placing", "drop", "dropping", "toss", "tossing", "stack",
          "stacking", "move it", "bring", "bringing"}
 POINT = {"point", "pointing", "show", "showing", "look", "looking", "touch", "touching", "tap", "tapping"}
 MOVE = {"move", "moving", "go", "going", "shift", "shifting", "slide", "sliding", "head", "heading", "lean", "leaning"}
@@ -237,11 +237,21 @@ class IntentParser:
             if "home" in span[1:4]:
                 return Intent("home"), i + span.index("home") + 1
             d, end = find(lambda x: DIRS.get(x))
-            if d:
+            c, cend = find(self._color)
+            if d and not (c and cend < end):           # "moving left" (but not "moving the green cube to the right")
                 small = any(x in SMALL for x in W[i:end])
                 return Intent("nudge" if small else "move", dir=d, amount=0.025 if small else 0.07), end
-            c, end = find(self._color)
             if c:
-                return Intent("point", obj=c), end
+                # "moving the green cube to the right / into the bowl" = pick it and place it there
+                for k in range(cend - i, len(span)):
+                    x = span[k]
+                    if x in WHERE or self._color(x) and self._color(x) != c:
+                        where = WHERE.get(x) or self._color(x)
+                        it = Intent("place", where=where)
+                        self.last_obj = c
+                        return it, i + k + 1
+                if not complete:
+                    return None, None
+                return Intent("point", obj=c), cend
             return (None, None) if not complete else None
         return None
