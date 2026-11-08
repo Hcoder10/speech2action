@@ -44,8 +44,13 @@ class Demos:
         o = ep[key + "_off"]
         return cv2.imdecode(ep[key + "_jpg"][o[t]:o[t + 1]], cv2.IMREAD_COLOR)[..., ::-1]
 
+    def set_early_weight(self, w, t_max=40):
+        p = np.where(self.index[:, 1] < t_max, w, 1.0)
+        self.p = p / p.sum()
+
     def sample(self, rng, bs):
-        idx = self.index[rng.integers(len(self.index), size=bs)]
+        p = getattr(self, "p", None)
+        idx = self.index[rng.choice(len(self.index), size=bs, p=p) if p is not None else rng.integers(len(self.index), size=bs)]
         front, wrist, state, act, pad, tasks = [], [], [], [], [], []
         for e, t in idx:
             ep = self.eps[e]
@@ -130,6 +135,9 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--save_every", type=int, default=500)
     ap.add_argument("--max_steps", type=int, default=100000)
+    ap.add_argument("--resume", help="dir with trainable.safetensors to start from")
+    ap.add_argument("--early_weight", type=float, default=1.0, help="oversample the first 40 frames (approach: grounding)")
+    ap.add_argument("--warm", type=int, default=150)
     a = ap.parse_args()
     lease_frac = float(os.environ.get("LANDLORD_VRAM_GB", 0)) / 15.92
     device = "cuda"
@@ -139,7 +147,14 @@ def main():
     t0 = time.time()
     data = Demos(a.data)
     print(f"{len(data.eps)} episodes, {len(data.index)} frames, load {time.time() - t0:.0f}s", flush=True)
+    if a.early_weight != 1.0:
+        data.set_early_weight(a.early_weight)
     pol, cfg = build_policy(device)
+    if a.resume:
+        from safetensors.torch import load_file
+        _, unexpected = pol.load_state_dict(load_file(str(Path(a.resume) / "trainable.safetensors")), strict=False)
+        assert not unexpected
+        print("resumed from", a.resume, json.loads((Path(a.resume) / "meta.json").read_text()).get("step"), flush=True)
     pol.train()
     tok = Tok(cfg.vlm_model_name, cfg.tokenizer_max_length)
     params = [p for p in pol.parameters() if p.requires_grad]
@@ -156,7 +171,7 @@ def main():
     for s in range(3):
         threading.Thread(target=producer, args=(s,), daemon=True).start()
     t_start, step, ema = time.time(), 0, None
-    warm = 150
+    warm = a.warm
     while step < a.max_steps:
         el = time.time() - t_start
         if el > budget:

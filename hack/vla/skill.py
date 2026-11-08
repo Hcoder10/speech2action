@@ -2,7 +2,7 @@
 process (hack/vla/server.py, LeRobot 0.6.1 venv, GPU) and is reached over a local socket.
 
     from hack.vla.skill import VLAClient, VLASkill, grab_views
-    client = VLAClient()                                     # connects to the server (default 127.0.0.1:8765)
+    client = VLAClient()                                     # connects to the server (default 127.0.0.1:8777)
     skill = VLASkill(client, "put the red cube in the bowl")
     a = skill.act(obs, *grab_views(env))                     # (6,) in [-1, 1] for SO101Env(action_mode="delta", max_delta=6)
 
@@ -18,7 +18,7 @@ from multiprocessing.connection import Client
 import numpy as np
 
 MAX_DELTA = 6.0
-ADDR = ("127.0.0.1", 8765)
+ADDR = ("127.0.0.1", 8777)
 AUTH = b"so101-vla"
 
 
@@ -59,18 +59,46 @@ class VLASkill:
         self.t = 0
         self.chunks: list[tuple[int, np.ndarray]] = []
         self.latency: list[float] = []
+        self.async_ = False
+        self._pending = None
 
-    def goal(self, joints, wrist, front) -> np.ndarray:
-        if self.t % self.replan == 0 or not self.chunks:
-            t0 = time.perf_counter()
-            self.chunks.append((self.t, self.c.chunk(joints, wrist, front, self.instr)))
-            self.latency.append(time.perf_counter() - t0)
-        self.chunks = [(s, c) for s, c in self.chunks if self.t - s < min(len(c), self.h)]
-        preds = np.stack([c[self.t - s] for s, c in self.chunks])          # oldest first
+    def start_async(self):
+        """Real-time mode (the app's 30 Hz loop): inference runs in a background thread, the tick never blocks.
+        A chunk is indexed by the tick of the observation it was computed from, so late chunks stay aligned."""
+        import concurrent.futures as cf
+        self.async_, self._pool = True, cf.ThreadPoolExecutor(1)
+        return self
+
+    def _request(self, joints, wrist, front, tick=None):
+        t0, tick = time.perf_counter(), self.t if tick is None else tick
+        c = self.c.chunk(joints, wrist, front, self.instr)
+        self.latency.append(time.perf_counter() - t0)
+        return tick, c
+
+    def goal(self, joints, wrist, front=None) -> np.ndarray:
+        """`wrist` may be a callable returning (wrist, front): views are then rendered only on ticks that re-plan."""
+        if callable(wrist):
+            views = wrist
+            need = (not self.chunks or (self.async_ and self._pending is None and self.t - self.chunks[-1][0] >= self.replan)
+                    or (not self.async_ and self.t % self.replan == 0))
+            wrist, front = views() if need else (None, None)
+        if self.async_:
+            if self._pending is not None and self._pending.done():
+                self.chunks.append(self._pending.result()); self._pending = None
+            if not self.chunks:                       # first chunk: wait for it
+                self.chunks.append(self._request(joints, wrist, front))
+            elif self._pending is None and self.t - self.chunks[-1][0] >= self.replan:
+                self._pending = self._pool.submit(self._request, np.array(joints), np.array(wrist), np.array(front), self.t)
+        elif self.t % self.replan == 0 or not self.chunks:
+            self.chunks.append(self._request(joints, wrist, front))
+        live = [(s, c) for s, c in self.chunks if self.t - s < min(len(c), self.h)]
+        self.chunks = live or self.chunks[-1:]
+        preds = np.stack([c[min(self.t - s, len(c) - 1)] for s, c in self.chunks])          # oldest first
         w = np.exp(-self.k * np.arange(len(preds)))
         self.t += 1
         return (w[:, None] * preds).sum(0) / w.sum()
 
-    def act(self, obs, wrist, front) -> np.ndarray:
+    def act(self, obs, wrist, front=None) -> np.ndarray:
+        """obs from the env; (wrist, front) images, or a zero-arg callable returning them (rendered only when needed)."""
         g = self.goal(obs["joints"], wrist, front)
         return np.clip((g - np.asarray(obs["prev_goal"], float)) / MAX_DELTA, -1, 1)

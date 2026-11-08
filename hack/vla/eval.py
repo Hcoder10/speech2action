@@ -24,12 +24,13 @@ def main():
     ap.add_argument("--max_s", type=float, default=20.0)
     ap.add_argument("--video")
     ap.add_argument("--out")
+    ap.add_argument("--port", type=int, default=8777)
     a = ap.parse_args()
     from hack.scene import DemoEnv
     from hack.vla.gen_demos import in_bowl
     from hack.vla.skill import VLAClient, VLASkill
 
-    pol = VLAClient()
+    pol = VLAClient(("127.0.0.1", a.port))
     rows, frames, lat = [], [], []
     for i in range(a.n):
         seed, color = a.seed0 + i, COLORS[i % 3]
