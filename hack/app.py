@@ -146,6 +146,7 @@ class App:
         self.ctrl = Controller(args, self.emit_threadsafe)
         self.voice = None
         self.probe = None
+        self.last_user_voice = -1e9
         if args.hidden:
             from .hidden.probe import HiddenProbe
             self.probe = HiddenProbe()
@@ -224,9 +225,18 @@ class App:
                         except Exception:
                             pass
 
+    def on_level(self, who, lvl):
+        if who == "user" and lvl > 0.015:
+            self.last_user_voice = time.perf_counter()
+
     def on_hidden(self, h, k):
         """Every 80 ms: the probe reads PersonaPlex's hidden state; confident, sustained predictions act at once."""
-        for it in self.probe.push(h):
+        # gate: the probe may act only in the ~1.5 s right after the user spoke (mic energy), which is where it was
+        # trained to look; on held-out sessions that removed every spurious fire during the agent's own speech
+        its = self.probe.push(h)
+        if time.perf_counter() - self.last_user_voice > 1.5:
+            its = []
+        for it in its:
             if it.obj:
                 self.parser.last_obj = it.obj
             if it.kind in ("pick", "point", "place"):
@@ -245,12 +255,12 @@ class App:
         while True:
             self.voice = PersonaPlex(
                 self.args.pp_url, persona(self.ctrl.objects), voice=self.args.voice, on_text=self.on_agent_text,
-                on_level=lambda who, lvl: None, in_device=self.args.in_device, out_device=self.args.out_device,
+                on_level=self.on_level, in_device=self.args.in_device, out_device=self.args.out_device,
                 on_state=lambda s: self.emit({"type": "voice", "state": s}), mic_wav=self.args.mic_wav,
                 record_audio=(self.args.record[:-4] + ".wav") if self.args.record else None,
                 record_t0=lambda: getattr(self.ctrl, "record_t0", None),
-                speaker=not self.args.no_speaker)
-                on_hidden=self.on_hidden if self.probe is not None else None,
+                speaker=not self.args.no_speaker,
+                on_hidden=self.on_hidden if self.probe is not None else None)
             try:
                 await self.voice.run()
             except Exception as e:
