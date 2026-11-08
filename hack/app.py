@@ -274,6 +274,7 @@ class App:
             self.voice = PersonaPlex(
                 self.args.pp_url, persona(self.ctrl.objects), voice=self.args.voice, on_text=self.on_agent_text,
                 on_level=self.on_level, in_device=self.args.in_device, out_device=self.args.out_device,
+                mic_gain=self.args.mic_gain,
                 on_state=lambda s: self.emit({"type": "voice", "state": s}), mic_wav=self.args.mic_wav,
                 record_audio=(self.args.record[:-4] + ".wav") if self.args.record else None,
                 record_t0=lambda: getattr(self.ctrl, "record_t0", None),
@@ -351,6 +352,7 @@ def main():
     ap.add_argument("--out-device", type=int)
     ap.add_argument("--mic-wav", help="scripted user audio instead of the microphone")
     ap.add_argument("--no-speaker", action="store_true")
+    ap.add_argument("--mic-gain", type=float, default=0.35, help="this laptop's mic is very hot (speech ~0.5 RMS)")
     ap.add_argument("--vad", type=float, default=0.03, help="mic RMS that counts as the user speaking")
     ap.add_argument("--hidden", action="store_true", help="act on the hidden-state probe as well as the words")
     ap.add_argument("--duration", type=float, help="run this many seconds, then shut down cleanly")

@@ -68,7 +68,7 @@ class PersonaPlex:
         self.in_device, self.out_device = in_device, out_device
         self.mic_gain, self.duck, self.volume = mic_gain, duck, volume
         self.mic = Ring(int(MODEL_RATE * 0.6))
-        self.spk = Ring(int(MODEL_RATE * 1.5))
+        self.spk = Ring(int(MODEL_RATE * 0.8))      # never let Pip fall more than 0.8 s behind
         self.ready = asyncio.Event()
         self.stop = asyncio.Event()
         self.agent_speaking_until = 0.0
@@ -77,7 +77,10 @@ class PersonaPlex:
         self.speaker = speaker
         self.record_audio, self.record_t0 = record_audio, record_t0 or (lambda: None)
         self.rec_chunks: list = []                # (wall time, pcm) of the agent's voice, for the demo video
-        self.mic_rec: list = []                   # (wall time, pcm) of the user's mic, for the demo video
+        self.mic_rec: list = []                   # contiguous 24 kHz mic stream, for the demo video
+        self.out_rec: list = []                   # contiguous 24 kHz speaker stream (what the user heard)
+        self.mic_t0 = self.out_t0 = None
+        self.underruns = 0
         self.wav = None
         if mic_wav:                               # scripted user turns instead of a microphone (tests, rehearsals)
             import wave
@@ -103,13 +106,33 @@ class PersonaPlex:
             # while Pip talks through laptop speakers its echo reaches the mic: only loud speech counts as the user
             self.on_level("user", 0.0 if self.muted or (speaking and lvl < 0.05) else lvl)
             y = resample(x, in_rate, MODEL_RATE)
-            if self.record_audio:
-                self.mic_rec.append((time.perf_counter(), y.copy()))
-            self.mic.push(y * g)
+            if self.record_audio:                       # contiguous stream; only the first timestamp is used
+                if self.mic_t0 is None:
+                    self.mic_t0 = time.perf_counter() - frames / in_rate
+                self.mic_rec.append(np.tanh(y * self.mic_gain * 1.5) / 1.5)
+            self.mic.push(np.tanh(y * g * 1.5) / 1.5)          # soft-limit what the model hears
+
+        self._playing = False
 
         def spk_cb(outdata, frames, t, status):
             need = int(round(frames * MODEL_RATE / DEV_RATE))
-            pcm = self.spk.pop(need)
+            # jitter buffer: start (and restart after a dry spell) only once 120 ms is queued, never play half chunks
+            if not self._playing and self.spk.depth >= int(0.12 * MODEL_RATE):
+                self._playing = True
+            if self._playing and self.spk.depth >= need:
+                pcm = self.spk.pop(need)
+            else:
+                if self._playing and self.spk.depth < need:
+                    self.underruns += 1
+                self._playing = False
+                pcm = np.zeros(need, np.float32)
+            if hasattr(self, "_last_out"):                  # resample across block edges without a seam
+                y_in = np.r_[self._last_out[-1:], pcm]
+            self._last_out = pcm
+            if self.record_audio:                       # exactly what came out of the speaker, contiguous
+                if self.out_t0 is None:
+                    self.out_t0 = time.perf_counter()
+                self.out_rec.append(pcm.copy())
             y = resample(pcm, MODEL_RATE, DEV_RATE)
             y = np.pad(y, (0, max(0, frames - y.size)))[:frames]
             outdata[:, 0] = np.clip(y * self.volume, -1, 1)
@@ -199,26 +222,40 @@ class PersonaPlex:
 
     def _save_audio(self):
         t0 = self.record_t0()
-        if not self.record_audio or not self.rec_chunks or t0 is None:
+        if not self.record_audio or t0 is None or getattr(self, "_saved", False):
             return
         import wave
-        end = max([t for t, _ in self.rec_chunks] + [t for t, _ in self.mic_rec]) - t0 + 1
-        out = np.zeros(int(end * MODEL_RATE) + MODEL_RATE, np.float32)
-        pos = 0
-        for t, pcm in self.rec_chunks:                      # lay chunks on the wall clock, never overlapping
-            pos = max(pos, int((t - t0) * MODEL_RATE))
-            if pos >= 0:
-                out[pos:pos + pcm.size] = pcm[:max(0, out.size - pos)]
-            pos += pcm.size
-        for t, pcm in self.mic_rec:                         # the live user's voice
-            p0 = int((t - t0) * MODEL_RATE)
-            if 0 <= p0 < out.size:
-                seg = pcm[:out.size - p0]
-                out[p0:p0 + seg.size] += 0.9 * seg
+        tracks = []                                         # (start offset s, samples, gain)
+        if self.out_rec and self.out_t0 is not None:
+            tracks.append((self.out_t0 - t0, np.concatenate(self.out_rec), 0.8))
+        elif self.rec_chunks:                               # no speaker (scripted runs): lay network chunks end to end
+            first = self.rec_chunks[0][0]
+            tracks.append((first - t0, np.concatenate([p for _, p in self.rec_chunks]), 0.8))
+        if self.mic_rec and self.mic_t0 is not None:
+            tracks.append((self.mic_t0 - t0, np.concatenate(self.mic_rec), 0.7))
+        if not tracks:
+            return
+        end = max(off + x.size / MODEL_RATE for off, x, _ in tracks) + 1
+        out = np.zeros(int(end * MODEL_RATE), np.float32)
+        for off, x, g in tracks:
+            a = int(off * MODEL_RATE)
+            if a < 0:
+                x, a = x[-a:], 0
+            seg = x[:max(0, out.size - a)]
+            out[a:a + seg.size] += g * seg
         if self.wav is not None:                            # mix the scripted user voice in too
             u0 = int((self.ready_t - t0) * MODEL_RATE)
             u = self.wav[max(0, -u0):]
             out[max(0, u0):max(0, u0) + u.size] += 0.8 * u[:max(0, out.size - max(0, u0))]
+        for name, x in (("speaker", np.concatenate(self.out_rec) if self.out_rec else None),
+                        ("mic", np.concatenate(self.mic_rec) if self.mic_rec else None)):
+            if x is not None:                               # raw tracks, for debugging the mix
+                with wave.open(self.record_audio[:-4] + f"_{name}.wav", "wb") as w:
+                    w.setnchannels(1); w.setsampwidth(2); w.setframerate(MODEL_RATE)
+                    w.writeframes((np.clip(x, -1, 1) * 32000).astype(np.int16).tobytes())
+        print(f"speaker underruns: {self.underruns}", flush=True)
+        out = np.tanh(out * 1.2) / np.tanh(1.2)            # soft limiter instead of hard clipping
         with wave.open(self.record_audio, "wb") as w:
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(MODEL_RATE)
-            w.writeframes((np.clip(out, -1, 1) * 32767).astype(np.int16).tobytes())
+            w.writeframes((out * 32000).astype(np.int16).tobytes())
+        self._saved = True
