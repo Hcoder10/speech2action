@@ -54,13 +54,17 @@ class Ring:
 class PersonaPlex:
     def __init__(self, url: str, text_prompt: str, voice: str = "NATF2.pt", seed: int = 42,
                  on_text=None, on_level=None, on_state=None, in_device=None, out_device=None,
-                 mic_gain: float = 1.0, duck: float = 0.35, volume: float = 1.0, mic_wav: str | None = None,
-                 speaker: bool = True, record_audio: str | None = None, record_t0=None, on_hidden=None):
+                 mic_gain: float = 1.0, duck: float = 0.7, volume: float = 1.0, mic_wav: str | None = None,
+                 speaker: bool = True, record_audio: str | None = None, record_t0=None, on_hidden=None,
+                 on_probs=None):
         sep = "&" if "?" in url else "?"
         self.url = f"{url}{sep}voice_prompt={quote(voice)}&text_prompt={quote(text_prompt)}&seed={seed}"
         self.on_hidden = on_hidden                # float16[4096] per 80 ms frame (needs the hidden-stream server patch)
         if on_hidden is not None:
             self.url += "&hidden=1"
+        self.on_probs = on_probs                  # 13 class probabilities per frame, probe run ON the server
+        if on_probs is not None:
+            self.url += "&probe=1"
         self.frames = 0
         self.on_text = on_text or (lambda s: None)
         self.on_level = on_level or (lambda who, lvl: None)
@@ -205,6 +209,10 @@ class PersonaPlex:
                         self.frames += 1
                         if self.on_hidden is not None:
                             self.on_hidden(np.frombuffer(payload, np.float16), self.frames)
+                    elif kind == 0x06:
+                        self.frames += 1
+                        if self.on_probs is not None:
+                            self.on_probs(np.frombuffer(payload, np.float32), self.frames)
                     elif kind == 0x02:
                         self.on_text(payload.decode("utf-8", errors="replace"))
 

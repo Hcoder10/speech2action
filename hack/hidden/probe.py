@@ -80,7 +80,14 @@ class HiddenProbe:
         return self.last_probs
 
     def push(self, h: np.ndarray) -> list[Intent]:
-        p = self.probs(h)
+        return self.decide(self.probs(h))
+
+    def push_probs(self, p: np.ndarray) -> list[Intent]:
+        """Probabilities computed by the server-side probe (deploy/patch_probe_stream.py)."""
+        self.last_probs = np.asarray(p, float)
+        return self.decide(self.last_probs)
+
+    def decide(self, p: np.ndarray) -> list[Intent]:
         c = int(np.argmax(p))
         if c == 0 or p[c] < self.th:
             self.run_cls, self.run_n = 0, 0

@@ -242,11 +242,14 @@ class App:
             if len(self.voice_hist) >= 20:                  # >= 0.4 s of speech in the last 2 s
                 self.last_user_voice = now
 
-    def on_hidden(self, h, k):
+    def on_probs(self, p, k):
+        self.on_hidden(None, k, probs=p)
+
+    def on_hidden(self, h, k, probs=None):
         """Every 80 ms: the probe reads PersonaPlex's hidden state; confident, sustained predictions act at once."""
         # gate: the probe may act only in the ~1.5 s right after the user spoke (mic energy), which is where it was
         # trained to look; on held-out sessions that removed every spurious fire during the agent's own speech
-        its = self.probe.push(h)
+        its = self.probe.push_probs(probs) if probs is not None else self.probe.push(h)
         if time.perf_counter() - self.last_user_voice > 1.5:
             its = []
         # the probe never overrides what is already happening (the words can); it may start things from idle,
@@ -279,7 +282,8 @@ class App:
                 record_audio=(self.args.record[:-4] + ".wav") if self.args.record else None,
                 record_t0=lambda: getattr(self.ctrl, "record_t0", None),
                 speaker=not self.args.no_speaker,
-                on_hidden=self.on_hidden if self.probe is not None else None)
+                on_hidden=self.on_hidden if (self.probe is not None and not self.args.server_probe) else None,
+                on_probs=self.on_probs if (self.probe is not None and self.args.server_probe) else None)
             try:
                 await self.voice.run()
             except Exception as e:
@@ -354,6 +358,7 @@ def main():
     ap.add_argument("--no-speaker", action="store_true")
     ap.add_argument("--mic-gain", type=float, default=0.35, help="this laptop's mic is very hot (speech ~0.5 RMS)")
     ap.add_argument("--vad", type=float, default=0.03, help="mic RMS that counts as the user speaking")
+    ap.add_argument("--server-probe", action="store_true", help="run the probe on the GPU box (52 B/frame, not 8 KB)")
     ap.add_argument("--hidden", action="store_true", help="act on the hidden-state probe as well as the words")
     ap.add_argument("--duration", type=float, help="run this many seconds, then shut down cleanly")
     ap.add_argument("--record", help="write the demo view to this .mp4 (agent audio goes to <name>.wav)")
