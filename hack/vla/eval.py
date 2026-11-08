@@ -25,6 +25,7 @@ def main():
     ap.add_argument("--video")
     ap.add_argument("--out")
     ap.add_argument("--port", type=int, default=8777)
+    ap.add_argument("--start", type=int, default=0)
     a = ap.parse_args()
     from hack.scene import DemoEnv
     from hack.vla.gen_demos import in_bowl
@@ -32,7 +33,7 @@ def main():
 
     pol = VLAClient(("127.0.0.1", a.port))
     rows, frames, lat = [], [], []
-    for i in range(a.n):
+    for i in range(a.start, a.start + a.n):
         seed, color = a.seed0 + i, COLORS[i % 3]
         instr = TEMPLATES[(i // 3) % 2].format(c=color)
         env = DemoEnv(seed=seed, obs_keys=("joints", "prev_goal", "wrist"), image_size=(256, 256))
@@ -42,7 +43,7 @@ def main():
         for k in range(int(a.max_s * 30)):
             wrist, front = obs["wrist"], env.sim.render("demo", 256, 256)
             obs, *_ = env.step(run.act(obs, wrist, front))
-            if a.video and i < 6 and k % 2 == 0:
+            if a.video and i - a.start < 4 and k % 2 == 0:
                 frames.append(env.render_view(w=480, h=360))
             o = env.objects()
             ok = in_bowl(o, color) and obs["prev_goal"][5] > 25       # in the bowl and released

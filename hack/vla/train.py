@@ -44,6 +44,8 @@ class Demos:
         o = ep[key + "_off"]
         return cv2.imdecode(ep[key + "_jpg"][o[t]:o[t + 1]], cv2.IMREAD_COLOR)[..., ::-1]
 
+    state_noise = None          # per-joint sigma (deg): forces the policy to read the target from pixels, not momentum
+
     def set_early_weight(self, w, t_max=40):
         p = np.where(self.index[:, 1] < t_max, w, 1.0)
         self.p = p / p.sum()
@@ -56,7 +58,7 @@ class Demos:
             ep = self.eps[e]
             n = len(ep["state"])
             front.append(self._img(ep, "front", t)); wrist.append(self._img(ep, "wrist", t))
-            state.append(ep["state"][t])
+            state.append(ep["state"][t] + (rng.normal(0, 1, 6) * self.state_noise if self.state_noise is not None else 0))
             j = np.minimum(np.arange(t, t + CHUNK), n - 1)
             act.append(ep["action"][j]); pad.append(np.arange(t, t + CHUNK) >= n)
             tasks.append(ep["task"])
@@ -138,6 +140,7 @@ def main():
     ap.add_argument("--resume", help="dir with trainable.safetensors to start from")
     ap.add_argument("--early_weight", type=float, default=1.0, help="oversample the first 40 frames (approach: grounding)")
     ap.add_argument("--warm", type=int, default=150)
+    ap.add_argument("--state_noise", type=float, default=0.0, help="scale on sigma (pan 6, lift/elbow/flex 4, roll 6, grip 3 deg)")
     a = ap.parse_args()
     lease_frac = float(os.environ.get("LANDLORD_VRAM_GB", 0)) / 15.92
     device = "cuda"
@@ -147,6 +150,8 @@ def main():
     t0 = time.time()
     data = Demos(a.data)
     print(f"{len(data.eps)} episodes, {len(data.index)} frames, load {time.time() - t0:.0f}s", flush=True)
+    if a.state_noise > 0:
+        data.state_noise = a.state_noise * np.array([6.0, 4.0, 4.0, 4.0, 6.0, 3.0])
     if a.early_weight != 1.0:
         data.set_early_weight(a.early_weight)
     pol, cfg = build_policy(device)
