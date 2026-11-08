@@ -7,6 +7,7 @@ dependencies = ["mujoco>=3.3", "gymnasium>=1.0", "numpy>=1.26", "scipy>=1.12", "
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+train = ["stable-baselines3>=2.3", "torch>=2.2"]   # hack/action_model training only; inference is numpy
 
 [build-system]
 requires = ["setuptools>=68"]
