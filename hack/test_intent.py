@@ -35,3 +35,11 @@ def test_misc():
     assert run(tok("I'll lift it a bit higher")) == ["nudge dir=up amount=0.025"]
     assert run(tok("let go")) == ["open"]
     assert run(tok("put it on top of the blue cube")) == ["place where=blue"]
+
+
+def test_multistep():
+    assert run(tok("Sure, I'll clean up the table!")) == ["cleanup"]
+    assert run(tok("Okay, putting everything in the bowl.")) == ["cleanup"]
+    assert run(tok("Let's build a tower!")) == ["tower"]
+    assert run(tok("Lining them up now.")) == ["lineup"]
+    assert run(tok("Stacking it on the blue cube")) == ["place where=blue"]

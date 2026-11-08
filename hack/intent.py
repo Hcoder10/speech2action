@@ -31,6 +31,9 @@ WAVE = {"wave", "waving", "waves", "hello", "hi", "bye", "goodbye"}
 NOD = {"nod", "nodding", "nods"}
 HOME = {"home", "rest", "resting", "start", "starting", "neutral", "reset"}
 DANCE = {"dance", "dancing", "wiggle", "wiggling", "celebrate", "celebrating"}
+CLEAN = {"clean", "cleaning", "tidy", "tidying", "everything", "all"}
+TOWER = {"tower", "stack", "stacking", "pile"}
+LINEUP = {"line", "lining", "row"}
 NEG = {"no", "not", "nope", "wrong", "actually", "instead", "oops", "sorry", "other"}
 DIRS = {"left": "left", "right": "right", "up": "up", "higher": "up", "upward": "up", "raise": "up", "lift": "up",
         "down": "down", "lower": "down", "downward": "down", "forward": "forward", "forwards": "forward",
@@ -148,6 +151,15 @@ class IntentParser:
                     return r, i + k + 1
             return None, None
 
+        # multi-step tasks: "clean up the table", "everything in the bowl", "build a tower", "line them up"
+        if w in ("clean", "cleaning", "tidy", "tidying"):
+            return Intent("cleanup"), i + 1
+        if w in ("everything", "all") and any(x in ("bowl", "away", "up") for x in span[1:6]):
+            return Intent("cleanup"), i + next(k for k in range(1, len(span)) if span[k] in ("bowl", "away", "up")) + 1
+        if w == "tower" or (w in ("stack", "stacking") and len(span) > 1 and span[1] in ("them", "everything", "all", "up")):
+            return Intent("tower"), i + 1
+        if w in ("line", "lining") and len(span) > 1 and span[1] in ("them", "up", "everything", "the"):
+            return Intent("lineup"), i + 2
         if w in STOP and not (w == "wait" and len(span) > 1 and span[1] in ("for", "until")):
             return Intent("stop"), i + 1
         if w in RESUME:
@@ -194,6 +206,8 @@ class IntentParser:
                 return Intent("point", obj="bowl"), end
             return (None, None) if not complete else None
         if w in PLACE:
+            if any(x in ("everything", "all") for x in span[1:4]) and any(x in ("bowl", "away") for x in span[1:8]):
+                return Intent("cleanup"), i + next(k for k in range(1, len(span)) if span[k] in ("bowl", "away")) + 1
             # "put it on the red cube" / "in the bowl" / "on the left"
             for k in range(1, len(span)):
                 x = span[k]

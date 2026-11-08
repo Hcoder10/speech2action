@@ -91,7 +91,8 @@
 const $ = id => document.getElementById(id);
 let ws, captionWords = [], captionTimer, muted = false;
 const examples = ["grabbing the red cube", "putting it in the bowl", "no, the blue one", "a little to the left",
-                  "a bit higher", "point at the green cube", "put it on top of the red cube", "stopping", "wave hello", "going home"];
+                  "a bit higher", "point at the green cube", "put it on top of the red cube", "stopping", "wave hello", "going home",
+                  "cleaning up the table", "building a tower", "lining them up"];
 for (const e of examples) { const c = document.createElement('span'); c.className = 'chip'; c.textContent = e;
   c.onclick = () => send({type: 'say', text: e}); $('chips').appendChild(c); }
 

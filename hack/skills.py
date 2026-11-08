@@ -223,6 +223,7 @@ class Skills:
             "pick": lambda: self.pick(it.obj), "point": lambda: self.point(it.obj),
             "place": lambda: self.place(it.where), "home": self.home, "wave": self.wave, "nod": self.nod,
             "dance": self.dance, "open": lambda: self.set_grip(OPEN, "open"), "close": lambda: self.set_grip(CLOSED, "close"),
+            "cleanup": self.cleanup, "tower": self.tower, "lineup": self.lineup,
         }
         if k in factories:
             key = (k, it.obj, it.where)
@@ -293,22 +294,80 @@ class Skills:
         if settle:
             yield from self._wait(0.3, grip=CLOSED, phase="holding")
 
+    def _held_offset(self):
+        """Where the held cube sits relative to the tip (measured, so placements land the CUBE, not the tip)."""
+        h = self.status.holding
+        if h and self.obj(h) is not None:
+            return self.obj(h)["pos"] - self._tip, self.obj(h)["size"] / 2
+        return np.zeros(3), 0.0
+
     def place_at(self, xy, into_bowl=False, on_obj=None):
-        top = 0.11 if into_bowl else (0.07 if on_obj else 0.05)
-        hover = np.r_[np.asarray(xy, float)[:2], LIFT_Z + 0.03]
-        yield from self._go(lambda: hover, grip=CLOSED, tol=0.02, phase="carry")
-        yield from self._go(lambda: np.r_[hover[:2], top], grip=CLOSED, tol=0.012, timeout=2.5, phase="lower")
+        hover_z = LIFT_Z + (0.07 if on_obj else 0.03)
+        dest = lambda: np.asarray(self.obj(on_obj)["pos"] if on_obj else xy, float)[:2]
+        off = lambda: self._held_offset()[0][:2]
+        if into_bowl:
+            low = 0.11
+        elif on_obj:                                # held cube's bottom 4 mm above the support's top
+            sup = self.obj(on_obj)
+            low = lambda: sup["pos"][2] + sup["size"] / 2 + 0.004 - self._held_offset()[0][2] + self._held_offset()[1]
+        else:
+            low = lambda: 0.004 - self._held_offset()[0][2] + max(self._held_offset()[1], 0.015)
+        lowz = low if callable(low) else (lambda: low)
+        yield from self._go(lambda: np.r_[dest() - off(), hover_z], grip=CLOSED, tol=0.015, phase="carry")
+        yield from self._go(lambda: np.r_[dest() - off(), lowz()], grip=CLOSED, tol=0.008, timeout=3.0, phase="lower")
         yield from self._wait(0.5, grip=OPEN, phase="release")
         if self.status.holding:
             self._say(f"released {self.status.holding}")
         self.status.holding = None
-        yield from self._go(lambda: np.r_[hover[:2], LIFT_Z + 0.03], grip=OPEN, tol=0.02, phase="retreat")
+        up = np.r_[self._tip[:2], hover_z]
+        yield from self._go(lambda: up, grip=OPEN, tol=0.02, phase="retreat")
+
+    # ------------------------------------------------------------------ multi-step tasks
+    def cubes(self):
+        return [c for c in ("red", "green", "blue") if self.obj(c) is not None]
+
+    def cleanup(self):
+        """Everything into the bowl, nearest first."""
+        for _ in range(3):
+            todo = [c for c in self.cubes() if not self._in_bowl(c)]
+            if not todo:
+                break
+            c = min(todo, key=lambda c: np.linalg.norm(self.obj(c)["pos"][:2] - self._tip[:2]))
+            self.status.skill = f"clean up: {c}"
+            yield from self.pick(c, settle=False)
+            yield from self.place_at(self.objects["bowl"]["pos"], into_bowl=True)
+        yield from self.home()
+
+    def tower(self):
+        """Stack all three: the one nearest the middle is the base."""
+        free = [c for c in self.cubes() if not self._in_bowl(c)]
+        if len(free) < 2:
+            return
+        free.sort(key=lambda c: abs(self.obj(c)["pos"][1]))
+        base = free[0]
+        for c in free[1:]:
+            self.status.skill = f"tower: {c} on {base}"
+            yield from self.pick(c, settle=False)
+            yield from self.place_at(None, on_obj=base)
+            base = c
+        yield from self.home()
+
+    def lineup(self):
+        """Red, green, blue in a row across the front of the table (viewer's left to right)."""
+        slots = {"red": np.array([0.29, -0.08]), "green": np.array([0.29, 0.0]), "blue": np.array([0.29, 0.08])}
+        for c in self.cubes():
+            if self._in_bowl(c) or np.linalg.norm(self.obj(c)["pos"][:2] - slots[c]) < 0.02:
+                continue
+            self.status.skill = f"line up: {c}"
+            yield from self.pick(c, settle=False)
+            yield from self.place_at(slots[c])
+        yield from self.home()
 
     def place(self, where):
         if where == "bowl":
             yield from self.place_at(self.objects["bowl"]["pos"], into_bowl=True)
         elif where in ("red", "blue", "green") and self.obj(where) is not None:
-            yield from self.place_at(self.obj(where)["pos"], on_obj=where)
+            yield from self.place_at(None, on_obj=where)
         elif where in PLACES:
             yield from self.place_at(PLACES[where])
         else:
