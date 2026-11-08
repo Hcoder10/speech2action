@@ -71,7 +71,7 @@ class PersonaPlex:
         self.on_state = on_state or (lambda s: None)
         self.in_device, self.out_device = in_device, out_device
         self.mic_gain, self.duck, self.volume = mic_gain, duck, volume
-        self.barge = 0.12                         # raw mic RMS that counts as the user talking over Pip
+        self.barge = 99.0                         # echo-free: mic fully muted while Pip speaks (no barge-in)
         self.mic = Ring(int(MODEL_RATE * 0.6))
         self.spk = Ring(int(MODEL_RATE * 0.8))      # never let Pip fall more than 0.8 s behind
         self.ready = asyncio.Event()
@@ -209,7 +209,7 @@ class PersonaPlex:
                             lvl = float(np.sqrt(np.mean(pcm ** 2)))
                             self.on_level("agent", lvl)
                             if lvl > 0.01:
-                                self.agent_speaking_until = time.perf_counter() + self.spk.depth / MODEL_RATE + 0.25
+                                self.agent_speaking_until = time.perf_counter() + self.spk.depth / MODEL_RATE + 0.5
                     elif kind == 0x05:
                         self.frames += 1
                         if self.on_hidden is not None:
