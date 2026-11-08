@@ -103,7 +103,10 @@ class ArmSim:
                 horizon = min(horizon, self._queue[0][0])
             horizon = min(horizon, d.time + chunk)
             n = max(1, int(round((horizon - d.time) / dt)))
+            before = d.time
             mujoco.mj_step(m, d, nstep=n)
+            if d.time < before + 0.5 * n * dt:   # MuJoCo resets the data (time = 0) when the state goes NaN/huge
+                raise RuntimeError(f"simulation went unstable at t={before:.3f} (MuJoCo reset the state)")
             self._gripper_protection(n * dt)
 
     def _gripper_protection(self, elapsed: float) -> None:

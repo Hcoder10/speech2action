@@ -4,3 +4,6 @@ __pycache__/
 runs/
 MUJOCO_LOG.TXT
 so101_sim2real.egg-info/
+hack/action_model/runs/
+hack/assets/_*
+so101_sim2real/assets/demo_scene.xml

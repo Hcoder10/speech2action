@@ -146,7 +146,8 @@ class SO101Env(gym.Env):
         if dr.servo and s != 1.0 and s > 0:   # rescale the sampled deviation
             for k in ("kp", "kv", "tau", "omega_free", "frictionloss", "damping", "armature"):
                 base = getattr(self.nominal_params, k)
-                setattr(p, k, base * (getattr(p, k) / base) ** s)
+                ratio = np.divide(getattr(p, k), base, out=np.ones_like(base), where=base > 0)
+                setattr(p, k, base * ratio ** s)          # (0-valued params stay 0)
             p.latency = self.nominal_params.latency + (p.latency - self.nominal_params.latency) * s
         self.sim.set_params(p)
         self.ep_params = p
