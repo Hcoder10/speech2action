@@ -91,8 +91,11 @@ def main():
     ap.add_argument("--dr", type=float, default=1.0)
     ap.add_argument("--baseline", action="store_true")
     ap.add_argument("--path", default=None)
+    ap.add_argument("--no-calib-err", action="store_true", help="full DR except the joint-zero calibration error")
     a = ap.parse_args()
     dr = DRConfig() if a.dr == 1.0 else (DRConfig.off() if a.dr == 0 else DRConfig(scale=a.dr))
+    if a.no_calib_err:
+        dr.offset_sigma_deg = (0.0,) * 6
     env = ReachEnv(dr=dr, seed=0)
     pols = {"policy": ActionModel(a.path) if a.path else ActionModel()}
     if a.baseline:

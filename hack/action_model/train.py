@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
+
+for _k in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):   # 20 workers x 24 BLAS threads exhausted
+    os.environ.setdefault(_k, "1")                                         # the commit charge (1.2 GB/worker)
 from pathlib import Path
 
 import numpy as np
 import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor, VecNormalize
 
 from .kin import FEAT_VERSION, chain_from_model
 from .train_env import ReachEnv, make_env
@@ -105,7 +109,15 @@ def main():
     ap.add_argument("--name", default=time.strftime("ppo_%H%M"))
     ap.add_argument("--eval-every", type=float, default=150, help="seconds")
     ap.add_argument("--resume", default=None, help="run dir to continue from (uses last.zip)")
+    ap.add_argument("--export", nargs=2, metavar=("CKPT_ZIP", "OUT_NPZ"), default=None,
+                    help="export a checkpoint (its <stem>_vecnorm.pkl beside it) to a numpy npz and exit")
     a = ap.parse_args()
+    if a.export:
+        z = Path(a.export[0])
+        vn = VecNormalize.load(str(z.with_name(z.stem + "_vecnorm.pkl")), DummyVecEnv([make_env(0)]))
+        export_npz(PPO.load(z, device="cpu"), vn, Path(a.export[1]), meta={"ckpt": str(z)})
+        print("exported", a.export[1])
+        return
     torch.set_num_threads(6)
     run = HERE / "runs" / a.name
     run.mkdir(parents=True, exist_ok=True)

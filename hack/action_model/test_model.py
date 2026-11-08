@@ -16,11 +16,11 @@ HERE = Path(__file__).resolve().parent
 def _matching_run(am: ActionModel):
     from stable_baselines3.common.vec_env import VecNormalize
     import pickle
-    for vn in sorted(HERE.glob("runs/*/best_vecnorm.pkl"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for vn in sorted(HERE.glob("runs/*/*_vecnorm.pkl"), key=lambda p: p.stat().st_mtime, reverse=True):
         with open(vn, "rb") as f:
             v = pickle.load(f)
         if v.obs_rms.mean.shape == am.mean.shape and np.allclose(v.obs_rms.mean, am.mean, atol=0, rtol=0):
-            return vn.parent, v
+            return vn.with_name(vn.name.replace("_vecnorm.pkl", ".zip")), v
     return None, None
 
 
@@ -45,7 +45,7 @@ def test_numpy_matches_sb3():
     run, vn = _matching_run(am)
     if run is None:
         pytest.skip("training run for this reacher.npz is not on disk")
-    model = PPO.load(run / "best.zip", device="cpu")
+    model = PPO.load(run, device="cpu")
     rng = np.random.default_rng(1)
     for _ in range(200):
         joints = rng.uniform(-100, 100, 6); joints[5] = rng.uniform(0, 100)

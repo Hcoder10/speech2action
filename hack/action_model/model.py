@@ -6,6 +6,16 @@
 
 The observation is built from (joints, prev_goal, target, down) with nominal forward kinematics (`kin.py`), the
 same function the training env uses, so sim and real arm feed it identically.
+
+Notes for the skill layer (v2, PPO 5.6M steps, see eval.py):
+  * Converges to 15 mm in ~0.6 s (free) / ~0.9 s (down) and re-acquires a jumped target in ~0.3 s; call it every
+    tick with the CURRENT target, moving targets are fine (trained on 1-4 cm/s drifts and jumps).
+  * Precision: ~3 mm without calibration error; under full DR ~13 mm median, and that is entirely the per-episode
+    joint-zero error (DR minus that term: 3-4 mm). It is a fixed bias per arm, so a constant target offset
+    measured once on the real arm removes most of it.
+  * down=1 is kinematically achievable (fingers vertical) only for tip heights <= ~6 cm within ~0.3 m reach;
+    at 9-12 cm the arm cannot point straight down (min tilt 5-30 deg), so hover low (~5 cm above the grasp).
+  * Roll (a[4]) and gripper (a[5]) are 0 here; the model sees the measured roll and adapts the tip to it.
 """
 from __future__ import annotations
 
