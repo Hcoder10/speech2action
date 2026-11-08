@@ -1,0 +1,99 @@
+{
+ "scope": "SO-101 sim v3 bench calibration (2026-09-19). Images and joint logs only; no hardware was touched. Every number here is a fit to the owner's recorded frames, not a physical measurement.",
+ "robot_model": {
+  "source": "TheRobotStudio/SO-ARM100 Simulation/SO101/so101_new_calib.xml (Apache-2.0)",
+  "commit": "f555c6c70679236eea8ea2e69fbe6b724626997f",
+  "why": "The Menagerie SO-ARM100 surrogate has no wrist-camera mount and its roll zero is unrelated to the bench. The official SO-101 model carries the camera mount location, LeRobot joint names and LeRobot sign conventions. The two models are kinematically the same chain: official = [-pan, lift+90.0, elbow-90.0, wrist, roll+2.77] deg relative to Menagerie radians (sim/so101/v3/calib/map_models.py; finger-axis disagreement <= 0.02 deg over 50 random poses)."
+ },
+ "joint_convention": {
+  "rule": "model_rad = deg2rad(real_deg + offset_deg); gripper 0-100 maps linearly to [jaw_closed_rad, jaw_closed_rad + jaw_span_rad]",
+  "offset_deg": {
+   "shoulder_pan": 0.0,
+   "shoulder_lift": -8.0,
+   "elbow_flex": -4.0,
+   "wrist_flex": -9.0,
+   "wrist_roll": -164.0
+  },
+  "jaw_closed_rad": -0.17,
+  "jaw_span_rad": 2.114341722416,
+  "evidence": {
+   "wrist_roll": "Table normal in the wrist camera at the logged state of artifacts/so101_hw/direct_base_1842/frames/0000.jpg [14.07,-90.64,38.99,102.37,77.14,2.10] is reproduced with real = model + 164 deg (0.5-deg grid, sim/so101/v3/calib/solve_offsets.py; 167 with the first camera fit, whose mount yaw was 3 deg different: the roll offset and the mount yaw trade off one for one). The lead's image-only estimate of 2026-09-16 was 166. Roll SIGN +1 confirmed on the 0000->0005 frame pair (geodesic error 6.7 vs 18.1 deg).",
+   "pitch_chain": "With zero offsets the v3 model puts the owner's two table-touch poses 34.0 and 23.9 mm BELOW the base plane and the camera normal 21.7 deg from the measured one. Offsets (lift -8, elbow -4, wrist -9) put the touches at -2.5 and +2.3 mm and the normal within 0.7 deg (solve_offsets.py, artifacts/so101/sim_v3/camera_match/joint_offsets_v3.json). Data alone constrain the SUM (-20..-24 deg) and the wrist term (-8..-15); the split uses a weak prior from the mechanical stops (owner's recorded range ends vs the official joint limits: -9, -5, -7.5; sd 8 deg), which the data-driven optimum lands next to.",
+   "shoulder_pan": "Sign taken from the official model (built for LeRobot). NOT independently verified: the only usable real frame pair moved pan by 2.1 deg (6.7 vs 7.7 deg error for the two signs)."
+  },
+  "unverified": [
+   "shoulder_pan sign (taken from the official model)",
+   "split of the pitch offset between lift and elbow",
+   "joint state of wrist_1845.png (none was saved with it; it is tied to frame 0000 by a measured 12.4-deg camera rotation, median bearing residual 1.0 deg, 67 SIFT inliers)",
+   "real bowl diameter (the sim bowl is 150 mm; the rim ellipse in the blend is close, which checks camera height x FOV only as a product)"
+  ]
+ },
+ "owner_range_deg": {
+  "shoulder_pan": [
+   -108.84,
+   108.84
+  ],
+  "shoulder_lift": [
+   -91.17,
+   91.17
+  ],
+  "elbow_flex": [
+   -100.09,
+   100.09
+  ],
+  "wrist_flex": [
+   -102.81,
+   102.81
+  ],
+  "wrist_roll": [
+   -180.0,
+   180.0
+  ],
+  "source": "sim/so101/owner_calibration_20260916.json; span = (range_max - range_min) * 360 / 4095, centred on the LeRobot zero (mid-range)"
+ },
+ "wrist_camera": {
+  "parent_body": "gripper",
+  "frame_note": "gripper body frame of the official model: fingers along -Z, jaw-plane normal +Y (camera side), moving jaw on +X",
+  "lens_pos_m": [
+   0.0058,
+   0.0514,
+   -0.0306
+  ],
+  "tilt_deg": 32.63,
+  "yaw_deg": 2.17,
+  "roll_deg": -0.46,
+  "fovy_deg": 69.6,
+  "render_size": [
+   640,
+   480
+  ],
+  "evidence": "Innomaker U20CAM-720P lens spec: HFOV 102 deg at 1280x720 -> rectilinear fovy 69.6 deg; the 640x480 DirectShow mode is the centre 4:3 crop of the same rows (jaw outline lands at the same fractional rows/columns in both modes). Mount: full gripper-mask IoU on wrist_1845.png + wrist_20260916.png with the v3 jaws, Nelder-Mead from 8 starts inside +-30 mm / +-12 deg of the official mount (sim/so101/v3/calib/fit_camera.py): best IoU 0.836; 7 of 8 starts within 0.01 IoU span x 5.8-11.4 mm, y 50-71 mm, z -36..+4 mm, tilt 30.8-34.8 deg, i.e. the silhouette does not fix the distance along the optical axis (about 40 mm of slack). The most forward solution is used because the real frames show no gripper housing at the bottom edge. The official mount tilt is 25.1 deg.",
+  "not_modelled": "lens distortion (the real 120-deg-diagonal lens has some barrel distortion); auto-exposure and white balance are covered only by the colour/brightness randomisation"
+ },
+ "table": {
+  "top_z_m": 0.0,
+  "evidence": "both owner table-touch poses land within 2.5 mm of the base plane after the joint offsets, i.e. the arm stands on the table it touches"
+ },
+ "real_start_pose_deg": [
+  14.2,
+  -90.2,
+  41.9,
+  101.3,
+  75.6,
+  2.7
+ ],
+ "canonical_frame": {
+  "decision": "team lead, 2026-09-19: all sim demonstrations are stored in the public-corpus canonical joint frame, not in the owner's raw readings",
+  "owner_to_corpus_deg": {
+   "shoulder_pan": 0.0,
+   "shoulder_lift": -11.5,
+   "elbow_flex": 0.0,
+   "wrist_flex": 0.0,
+   "wrist_roll": -76.0
+  },
+  "source": "COPY FOR REFERENCE ONLY. sim.py reads docs/wg/so101_owner_to_corpus.json directly (schema 2, so101-guard2's update of 2026-09-19: lift -13.0 -> -11.5 sigma 3, elbow 0 sigma 3.5, roll -76 sigma 8; pan and wrist_flex 0 by default, not measured). That file is what deploy/so101_policy_io.py maps the real arm through, so the sim must not keep a second number: an earlier copy here said lift -13.0 and would have put every stored lift value 1.5 deg away from the frame the deployed policy is handed.",
+  "rule": "canonical_deg = owner_deg + owner_to_corpus; model_deg = owner_deg + joint_convention.offset_deg; hence model_deg = canonical_deg + (0, +3.5, -4, -9, -88)",
+  "check": "sim joint limits are the owner's measured ranges, so the arm folded on its stops reads lift -102.7 / elbow +100.1 canonical (corpus: -103.7 / +96.5, i.e. 1.0 and 3.6 deg off, both inside the audit's sigmas of 3.0 and 3.5). Level gripper with the fingers at the bottom of the image reads roll 0 by construction of the -76 offset. NOT bench-measured: the offsets file still has measured=false.",
+  "note": "constants per joint: a later change of any offset is an exact affine edit of the stored state/action columns; the numbers actually used are written to frame.json beside every collected dataset"
+ }
+}

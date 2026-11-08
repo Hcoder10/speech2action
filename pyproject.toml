@@ -1,0 +1,19 @@
+[project]
+name = "so101-sim2real"
+version = "0.1.0"
+description = "SO-101 MuJoCo environment with a system-identified STS3215 servo model for sim-to-real transfer"
+requires-python = ">=3.11"
+dependencies = ["mujoco>=3.3", "gymnasium>=1.0", "numpy>=1.26", "scipy>=1.12", "opencv-python-headless>=4.8"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["so101_sim2real*"]
+
+[tool.setuptools.package-data]
+so101_sim2real = ["assets/**/*"]
