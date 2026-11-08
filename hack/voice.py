@@ -71,6 +71,7 @@ class PersonaPlex:
         self.on_state = on_state or (lambda s: None)
         self.in_device, self.out_device = in_device, out_device
         self.mic_gain, self.duck, self.volume = mic_gain, duck, volume
+        self.barge = 0.12                         # raw mic RMS that counts as the user talking over Pip
         self.mic = Ring(int(MODEL_RATE * 0.6))
         self.spk = Ring(int(MODEL_RATE * 0.8))      # never let Pip fall more than 0.8 s behind
         self.ready = asyncio.Event()
@@ -103,8 +104,12 @@ class PersonaPlex:
         def mic_cb(indata, frames, t, status):
             x = indata[:, 0].astype(np.float32)
             g = 0.0 if self.muted else self.mic_gain
+            lvl0 = float(np.sqrt(np.mean(x ** 2)))
             if time.perf_counter() < self.agent_speaking_until:      # laptop speakers: don't let it hear itself
-                g *= self.duck
+                # echo gate: while Pip talks, only a loud barge-in (the user right at the laptop) gets through
+                if lvl0 >= self.barge:
+                    self._barge_until = time.perf_counter() + 0.6
+                g = g if time.perf_counter() < getattr(self, "_barge_until", 0.0) else 0.0
             lvl = float(np.sqrt(np.mean(x ** 2)) + 1e-9)
             speaking = time.perf_counter() < self.agent_speaking_until
             # while Pip talks through laptop speakers its echo reaches the mic: only loud speech counts as the user
