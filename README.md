@@ -1,30 +1,47 @@
-# Pip: talk to an SO-101, full duplex
+# Pip: talk to an SO-101 robot arm, full duplex
 
-You talk to **PersonaPlex** (NVIDIA's full-duplex speech-to-speech model). It answers in its own voice, and what
-it *says* it is doing is what the arm does, starting while the sentence is still being spoken. Interrupt it,
-redirect it mid-reach ("no, the blue one"), nudge it ("a bit higher"), stop it. The arm runs a learned
-goal-conditioned action model (PPO, trained with the sim-to-real randomisation below) under a skill layer.
+[![demo](docs/demo.gif)](docs/demo.mp4)
 
-```
-mic -> PersonaPlex -> voice                    hack/voice.py      websocket client (opus both ways, text stream)
-            | its own words, ~12.5 Hz
-            v
-       hack/intent.py    streaming parser, fires mid-sentence (~0.03 ms/token, no LLM in the loop)
-       hack/skills.py    pick / place / point / nudge / wave / nod / dance / home / stop / resume, all interruptible
-       hack/action_model learned reacher (numpy inference)  | IK fallback with the same interface
-       hack/scene.py     calibrated SO-101 sim + 3 cubes + bowl   (--real mirrors it onto the arm)
-       hack/app.py       30 Hz control thread + web UI at http://localhost:8080
-```
+**[Watch the full demo with sound (docs/demo.mp4)](docs/demo.mp4).** Live take, real voice, captions are Pip's own words.
+
+You talk to **PersonaPlex** (NVIDIA's full-duplex speech-to-speech model, 7B). It answers in its own voice, and what
+it *says* it is doing is what the arm does, starting mid-sentence. On top of the words, a probe reads PersonaPlex's
+**hidden state** every 80 ms and acts on what you asked for before it has said anything. Built in a 3-hour hackathon
+on a MuJoCo sim of the SO-101 with a system-identified servo model (sim-to-real env below).
 
 ```
-python -m hack.app --no-voice                       # sim + UI; type what Pip would say
-python -m hack.app --model rl                       # with PersonaPlex at ws://127.0.0.1:8998/api/chat (ssh tunnel)
-python -m hack.app --model rl --real                # also drive the real arm (owner at the arm; runs/STOP aborts)
-python -m hack.sim_script --model rl --video x.mp4  # headless scripted conversation
+mic --> PersonaPlex (GPU) --> voice
+           |  text stream (its own words)          |  hidden state (4096-d, 12.5 Hz)
+           v                                        v
+     hack/intent.py  streaming parser        server-side linear probe (deploy/patch_probe_stream.py)
+           \________________ intents ________________/
+                           v
+     hack/skills.py   pick / place / point / nudge / wave / clean up / tower / line up / stop -- all interruptible
+     hack/action_model  learned goal-conditioned reacher (PPO, sim-to-real randomisation, numpy inference)
+     hack/scene.py      calibrated SO-101 sim + 3 cubes + bowl  (--real mirrors it onto the arm)
+     hack/app.py        30 Hz control loop + web UI (live view, captions, hidden-state bars)
 ```
 
-Measured in sim (36 picks over 12 random layouts, servo/latency randomisation on): IK fallback 34/36 grasps,
-learned model v1 32/36. Word-to-motion latency inside the app: ~25 ms (one control tick).
+## Results (measured today)
+
+| | |
+|---|---|
+| Word -> arm motion inside the app | ~25 ms (one control tick) |
+| "Stop!" | lands as the user finishes saying it (full duplex: PersonaPlex hears you while it talks) |
+| Hidden-state probe, 10 held-out sessions | 43/66 commands, 0 fires on chit-chat, **~0.4 s ahead of the words**; also catches commands PersonaPlex never says aloud |
+| Grasps (36 picks, 12 random layouts, randomised servos/latency) | learned reacher 32/36, IK fallback 34/36 |
+| Multi-step jobs | clean up the table 8/8, build a tower 8/8, line them up 7/8 |
+| SmolVLA distilled from the sim expert (pixels only) | 2/20 -- learns the motion, not *which* cube; grounding is the next step |
+
+## Run it
+
+```
+python -m hack.app --model rl --hidden --server-probe   # PersonaPlex at ws://127.0.0.1:8998/api/chat (ssh tunnel), UI on :8080
+python -m hack.app --no-voice                            # sim + UI only; type what Pip would say
+python -m hack.sim_script --model rl --video x.mp4      # headless scripted conversation
+```
+Server side: PersonaPlex (`NVIDIA/personaplex`) + `deploy/patch_hidden_stream.py` + `deploy/patch_probe_stream.py`
+(streams 13 probe probabilities per frame instead of the 8 KB hidden state, so it works over slow tunnels).
 
 ---
 
