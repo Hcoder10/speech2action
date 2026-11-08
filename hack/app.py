@@ -309,10 +309,14 @@ class App:
         finally:                                   # clean shutdown: close the video, save the agent audio
             for t in tasks:
                 t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 5)
+            except Exception:
+                pass
+            if self.voice is not None:
+                self.voice._save_audio()           # idempotent: make sure the audio is on disk before muxing
             self.ctrl.running = False
             await asyncio.get_running_loop().run_in_executor(None, self.ctrl.stopped.wait, 5)
-            await runner.cleanup()
             if self.args.record:
                 mux(self.args.record)
             print("session saved", flush=True)

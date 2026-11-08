@@ -208,12 +208,18 @@ class IntentParser:
         if w in PLACE:
             if any(x in ("everything", "all") for x in span[1:4]) and any(x in ("bowl", "away") for x in span[1:8]):
                 return Intent("cleanup"), i + next(k for k in range(1, len(span)) if span[k] in ("bowl", "away")) + 1
+            # "put it back (where it came from)" -> its original spot, not the back of the table
+            for k in range(1, len(span) - 1):
+                if span[k] == "back" and (span[k + 1] in ("where", "to", "there", "it", "in") or "came" in span[k:k + 5]):
+                    return Intent("place", where="origin"), i + k + 2
             # "put it on the red cube" / "in the bowl" / "on the left"
             for k in range(1, len(span)):
                 x = span[k]
                 c = self._color(x)
                 if c and k > 1 and span[k - 1] in ("the", "on", "top") and any(s in ("on", "onto", "top") for s in span[1:k]):
                     return Intent("place", where=c), i + k + 1
+                if x == "back" and k == len(span) - 1 and not complete:
+                    return None, None                        # "back" or "back where it came from"? wait a word
                 if x in WHERE:
                     return Intent("place", where=WHERE[x]), i + k + 1
                 if x in ("down", "there", "here"):

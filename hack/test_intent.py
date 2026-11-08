@@ -43,3 +43,8 @@ def test_multistep():
     assert run(tok("Let's build a tower!")) == ["tower"]
     assert run(tok("Lining them up now.")) == ["lineup"]
     assert run(tok("Stacking it on the blue cube")) == ["place where=blue"]
+
+
+def test_put_back():
+    assert run(tok("Sure, putting the green cube back where it came from.")) == ["place where=origin"]
+    assert run(tok("Putting it at the back.")) == ["place where=back"]

@@ -368,6 +368,9 @@ class Skills:
             yield from self.place_at(self.objects["bowl"]["pos"], into_bowl=True)
         elif where in ("red", "blue", "green") and self.obj(where) is not None:
             yield from self.place_at(None, on_obj=where)
+        elif where == "origin":
+            h = self.status.holding or self.last_obj
+            yield from self.place_at(self.origin.get(h, self._tip) if h else self._tip)
         elif where in PLACES:
             yield from self.place_at(PLACES[where])
         else:
