@@ -77,6 +77,7 @@ class PersonaPlex:
         self.speaker = speaker
         self.record_audio, self.record_t0 = record_audio, record_t0 or (lambda: None)
         self.rec_chunks: list = []                # (wall time, pcm) of the agent's voice, for the demo video
+        self.mic_rec: list = []                   # (wall time, pcm) of the user's mic, for the demo video
         self.wav = None
         if mic_wav:                               # scripted user turns instead of a microphone (tests, rehearsals)
             import wave
@@ -98,8 +99,13 @@ class PersonaPlex:
             if time.perf_counter() < self.agent_speaking_until:      # laptop speakers: don't let it hear itself
                 g *= self.duck
             lvl = float(np.sqrt(np.mean(x ** 2)) + 1e-9)
-            self.on_level("user", lvl * (g > 0))
-            self.mic.push(resample(x, in_rate, MODEL_RATE) * g)
+            speaking = time.perf_counter() < self.agent_speaking_until
+            # while Pip talks through laptop speakers its echo reaches the mic: only loud speech counts as the user
+            self.on_level("user", 0.0 if self.muted or (speaking and lvl < 0.05) else lvl)
+            y = resample(x, in_rate, MODEL_RATE)
+            if self.record_audio:
+                self.mic_rec.append((time.perf_counter(), y.copy()))
+            self.mic.push(y * g)
 
         def spk_cb(outdata, frames, t, status):
             need = int(round(frames * MODEL_RATE / DEV_RATE))
@@ -196,7 +202,7 @@ class PersonaPlex:
         if not self.record_audio or not self.rec_chunks or t0 is None:
             return
         import wave
-        end = max(t for t, _ in self.rec_chunks) - t0 + 1
+        end = max([t for t, _ in self.rec_chunks] + [t for t, _ in self.mic_rec]) - t0 + 1
         out = np.zeros(int(end * MODEL_RATE) + MODEL_RATE, np.float32)
         pos = 0
         for t, pcm in self.rec_chunks:                      # lay chunks on the wall clock, never overlapping
@@ -204,6 +210,11 @@ class PersonaPlex:
             if pos >= 0:
                 out[pos:pos + pcm.size] = pcm[:max(0, out.size - pos)]
             pos += pcm.size
+        for t, pcm in self.mic_rec:                         # the live user's voice
+            p0 = int((t - t0) * MODEL_RATE)
+            if 0 <= p0 < out.size:
+                seg = pcm[:out.size - p0]
+                out[p0:p0 + seg.size] += 0.9 * seg
         if self.wav is not None:                            # mix the scripted user voice in too
             u0 = int((self.ready_t - t0) * MODEL_RATE)
             u = self.wav[max(0, -u0):]

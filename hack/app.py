@@ -60,6 +60,7 @@ class Controller(threading.Thread):
         self.stopped = threading.Event()
         self.running = True
         self.objects = {}
+        self.status = {"skill": "idle", "holding": None, "in_bowl": ()}
 
     def make_ctrl(self, kin):
         if self.args.model == "rl":
@@ -120,6 +121,8 @@ class Controller(threading.Thread):
             if ok:
                 self.frame, self.frame_id = jpg.tobytes(), self.frame_id + 1
             now = time.perf_counter()
+            self.status = {"skill": sk.status.skill if sk.gen is not None else "idle", "holding": sk.status.holding,
+                           "in_bowl": tuple(c for c in COLORS if sk._in_bowl(c))}
             if now - last_status > 0.1:
                 st = sk.status
                 self.emit({"type": "status", "skill": st.skill, "phase": st.phase, "holding": st.holding,
@@ -147,6 +150,7 @@ class App:
         self.voice = None
         self.probe = None
         self.last_user_voice = -1e9
+        self.voice_hist: list = []
         if args.hidden:
             from .hidden.probe import HiddenProbe
             self.probe = HiddenProbe()
@@ -204,6 +208,8 @@ class App:
                     m = json.loads(msg.data)
                     if m.get("type") == "say":
                         self.on_typed(m["text"])
+                    elif m.get("type") == "end":
+                        self.end.set()
                     elif m.get("type") == "reset":
                         self.ctrl.cmds.put("reset")
                     elif m.get("type") == "mute" and self.voice is not None:
@@ -226,8 +232,15 @@ class App:
                             pass
 
     def on_level(self, who, lvl):
-        if who == "user" and lvl > 0.015:
-            self.last_user_voice = time.perf_counter()
+        """User voice activity from the mic, ~50 Hz. The probe may only act right after SUSTAINED user speech."""
+        if who != "user":
+            return
+        now = time.perf_counter()
+        if lvl > self.args.vad:
+            self.voice_hist.append(now)
+            self.voice_hist = [t for t in self.voice_hist if now - t < 2.0]
+            if len(self.voice_hist) >= 20:                  # >= 0.4 s of speech in the last 2 s
+                self.last_user_voice = now
 
     def on_hidden(self, h, k):
         """Every 80 ms: the probe reads PersonaPlex's hidden state; confident, sustained predictions act at once."""
@@ -236,6 +249,11 @@ class App:
         its = self.probe.push(h)
         if time.perf_counter() - self.last_user_voice > 1.5:
             its = []
+        # the probe never overrides what is already happening (the words can); it may start things from idle,
+        # stop anything, and never re-pick a cube that is in the bowl or in the hand
+        st = self.ctrl.status
+        its = [it for it in its if it.kind == "stop" or (st.get("skill", "idle") in ("idle", "stop") and not (
+            it.kind == "pick" and (it.obj == st.get("holding") or it.obj in st.get("in_bowl", ())))) ]
         for it in its:
             if it.obj:
                 self.parser.last_obj = it.obj
@@ -269,6 +287,7 @@ class App:
 
     async def main(self):
         self.loop = asyncio.get_running_loop()
+        self.end = asyncio.Event()
         self.ctrl.start()
         await asyncio.get_running_loop().run_in_executor(None, self.ctrl.ready.wait)
         app = web.Application()
@@ -283,10 +302,10 @@ class App:
         if not self.args.no_voice:
             tasks.append(asyncio.create_task(self.run_voice()))
         try:
-            if self.args.duration:
-                await asyncio.sleep(self.args.duration)
-            else:
-                await asyncio.gather(*tasks)
+            waiter = asyncio.create_task(self.end.wait())
+            await asyncio.wait([waiter, *tasks] if not self.args.duration else [waiter], timeout=self.args.duration,
+                               return_when=asyncio.FIRST_COMPLETED)
+            self.emit({"type": "voice", "state": "session ended, saving recording..."})
         finally:                                   # clean shutdown: close the video, save the agent audio
             for t in tasks:
                 t.cancel()
@@ -296,6 +315,9 @@ class App:
             await runner.cleanup()
             if self.args.record:
                 mux(self.args.record)
+            print("session saved", flush=True)
+            import os
+            os._exit(0)                          # don't hang on lingering audio threads / browser sockets
 
 
 def mux(mp4: str):
@@ -325,6 +347,7 @@ def main():
     ap.add_argument("--out-device", type=int)
     ap.add_argument("--mic-wav", help="scripted user audio instead of the microphone")
     ap.add_argument("--no-speaker", action="store_true")
+    ap.add_argument("--vad", type=float, default=0.03, help="mic RMS that counts as the user speaking")
     ap.add_argument("--hidden", action="store_true", help="act on the hidden-state probe as well as the words")
     ap.add_argument("--duration", type=float, help="run this many seconds, then shut down cleanly")
     ap.add_argument("--record", help="write the demo view to this .mp4 (agent audio goes to <name>.wav)")

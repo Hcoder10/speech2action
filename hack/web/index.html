@@ -92,6 +92,7 @@
         <button id="stopbtn">Stop</button>
         <button id="reset">New scene</button>
         <button id="mute">Mute mic</button>
+        <button id="endbtn">End &amp; save</button>
       </div>
     </div>
     <div class="card"><h3>Persona prompt</h3><div class="persona" id="persona"></div></div>
@@ -162,6 +163,7 @@ connect();
 $('f').onsubmit = e => { e.preventDefault(); const t = $('t').value.trim(); if (t) send({type: 'say', text: t}); $('t').value = ''; };
 $('stopbtn').onclick = () => send({type: 'say', text: 'stopping'});
 $('reset').onclick = () => send({type: 'reset'});
+$('endbtn').onclick = () => { if (confirm('End the session and save the recording?')) send({type: 'end'}); };
 $('mute').onclick = () => { muted = !muted; $('mute').classList.toggle('on', muted); $('mute').textContent = muted ? 'Mic muted' : 'Mute mic'; send({type: 'mute', on: muted}); };
 </script>
 </body>
