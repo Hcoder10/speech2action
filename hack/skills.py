@@ -11,6 +11,7 @@ pose always comes from forward kinematics of the measured joints, never from pri
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 
 import mujoco
@@ -29,6 +30,7 @@ GRASP_DEPTH = float(os.environ.get("HACK_DEPTH", 0.010))     # tip below the cub
 LIFT_SPEED = float(os.environ.get("HACK_LIFT_SPEED", 0.30))   # m/s while lifting a fresh grasp
 READY = np.array([0.20, 0.0, 0.17])
 LIFT_Z = 0.14
+ECHO_S = 6.0                 # a repeated identical intent within this many seconds of finishing is ignored
 CARROT_SPEED = 0.30          # m/s of the target fed to the action model
 WS_LO = np.array([0.08, -0.30, 0.008])
 WS_HI = np.array([0.36, 0.30, 0.32])
@@ -156,6 +158,8 @@ class Skills:
         self.roll_sign = self._roll_sign()
         self.events: list[str] = []
         self._drop_ticks = 0
+        self._last_key, self._last_done = None, -1e9
+        self.origin: dict = {}                     # where each cube was picked from (to put it back)
 
     # ------------------------------------------------------------------ helpers
     def _roll_sign(self) -> float:
@@ -178,6 +182,10 @@ class Skills:
         goal = self._joints[4] + self.roll_sign * rel
         lo, hi = self.c.low[4] + 5, self.c.high[4] - 5
         return float(np.clip(goal, lo, hi))
+
+    def _in_bowl(self, name) -> bool:
+        o, b = self.obj(name) if name else None, self.objects.get("bowl")
+        return bool(o is not None and b is not None and np.linalg.norm(o["pos"][:2] - b["pos"][:2]) < 0.06)
 
     def obj(self, name):
         return self.objects.get(name)
@@ -217,8 +225,18 @@ class Skills:
             "dance": self.dance, "open": lambda: self.set_grip(OPEN, "open"), "close": lambda: self.set_grip(CLOSED, "close"),
         }
         if k in factories:
+            key = (k, it.obj, it.where)
+            # PersonaPlex often confirms twice ("Putting it in the bowl. Okay, putting it in the bowl."):
+            # the same intent while it is running, or within ECHO_S of finishing it, is an echo, not a new request
+            if key == self._last_key and (self.gen is not None or time.perf_counter() - self._last_done < ECHO_S):
+                return
             if k == "pick" and it.obj == self.status.holding:
                 return
+            if k == "pick" and self._in_bowl(it.obj) and self._last_key == ("place", None, "bowl"):
+                return
+            self._last_key = key
+            if k == "place" and self.status.holding is None and it.where == "bowl" and self._in_bowl(self.last_obj):
+                return                                             # already there: nothing to do
             if k == "place" and self.status.holding is None and self.last_obj and self.last_obj != it.where:
                 obj = self.last_obj               # "put the red cube in the bowl" without a pick first
                 self._start(f"place {it.where}", lambda: self.chain(self.pick(obj, settle=False), self.place(it.where)))
@@ -262,12 +280,12 @@ class Skills:
         # further along the gripper's +x (toward the moving jaw)
         o = lambda: self.obj(name)["pos"] - (half + GRASP_CLEAR) * self._xg
         roll = lambda: self.align_roll(self.obj(name)["yaw"])
-        if self.status.holding:
-            yield from self.place_at(self.objects.get("bowl", {}).get("pos", READY), into_bowl=True) \
-                if False else iter(())
+        if self.status.holding and self.status.holding != name:     # changed its mind: put the first one back
+            yield from self.place_at(self.origin.get(self.status.holding, self._tip))
         yield from self._go(lambda: o() + [0, 0, 0.09], grip=OPEN, roll=roll, tol=0.02, phase="approach")
         yield from self._go(lambda: np.r_[o()[:2], max(0.004, o()[2] - GRASP_DEPTH)], grip=OPEN, roll=roll, tol=0.008,
                             timeout=2.5, phase="descend")
+        self.origin[name] = self.obj(name)["pos"].copy()
         yield from self._wait(0.6, grip=CLOSED, phase="grasp")
         self.status.holding = name
         self._say(f"holding {name}")
@@ -350,6 +368,7 @@ class Skills:
                 self.cmd = next(self.gen)
             except StopIteration:
                 self.gen = None
+                self._last_done = time.perf_counter()
                 done = self.status.skill
                 self.status.skill, self.status.phase = "idle", f"done: {done}"
                 self.cmd = Cmd(self.cmd.target.copy(), self.cmd.down, self.cmd.grip, self.cmd.roll)

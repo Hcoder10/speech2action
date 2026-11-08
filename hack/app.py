@@ -56,6 +56,7 @@ class Controller(threading.Thread):
         self.frame: bytes | None = None
         self.frame_id = 0
         self.ready = threading.Event()
+        self.stopped = threading.Event()
         self.running = True
         self.objects = {}
 
@@ -81,6 +82,7 @@ class Controller(threading.Thread):
             arm.move_to(np.asarray(obs["prev_goal"], float), speed_deg_s=15.0)
         self.ready.set()
         period, tick = 1 / 30, time.perf_counter()
+        writer = None
         last_status = 0.0
         while self.running:
             while not self.cmds.empty():
@@ -108,6 +110,11 @@ class Controller(threading.Thread):
                 self.emit({"type": "event", "text": e})
             sk.events.clear()
             img = env.render_view("demo", a.width, a.height)
+            if a.record:
+                if writer is None:
+                    writer = cv2.VideoWriter(a.record, cv2.VideoWriter_fourcc(*"mp4v"), 30, (a.width, a.height))
+                    self.record_t0 = time.perf_counter()
+                writer.write(img[..., ::-1])
             ok, jpg = cv2.imencode(".jpg", img[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, 82])
             if ok:
                 self.frame, self.frame_id = jpg.tobytes(), self.frame_id + 1
@@ -123,6 +130,9 @@ class Controller(threading.Thread):
                 time.sleep(delay)
             else:
                 tick = time.perf_counter()        # fell behind: don't try to catch up in a burst
+        if writer is not None:
+            writer.release()
+        self.stopped.set()
 
 
 class App:
@@ -144,6 +154,9 @@ class App:
         self._broadcast(json.dumps(msg))
 
     def _broadcast(self, s: str):
+        if self.args.log:
+            with open(self.args.log, "a", encoding="utf-8") as f:
+                f.write(f"{time.time():.3f} {s}" + "\n")
         for ws in list(self.clients):
             if not ws.closed:
                 asyncio.ensure_future(ws.send_str(s))
@@ -213,7 +226,10 @@ class App:
             self.voice = PersonaPlex(
                 self.args.pp_url, persona(self.ctrl.objects), voice=self.args.voice, on_text=self.on_agent_text,
                 on_level=lambda who, lvl: None, in_device=self.args.in_device, out_device=self.args.out_device,
-                on_state=lambda s: self.emit({"type": "voice", "state": s}))
+                on_state=lambda s: self.emit({"type": "voice", "state": s}), mic_wav=self.args.mic_wav,
+                record_audio=(self.args.record[:-4] + ".wav") if self.args.record else None,
+                record_t0=lambda: getattr(self.ctrl, "record_t0", None),
+                speaker=not self.args.no_speaker)
             try:
                 await self.voice.run()
             except Exception as e:
@@ -232,10 +248,36 @@ class App:
         await runner.setup()
         await web.TCPSite(runner, "0.0.0.0", self.args.port).start()
         print(f"UI: http://localhost:{self.args.port}", flush=True)
-        tasks = [self.frame_pump(), self.flusher()]
+        tasks = [asyncio.create_task(self.frame_pump()), asyncio.create_task(self.flusher())]
         if not self.args.no_voice:
-            tasks.append(self.run_voice())
-        await asyncio.gather(*tasks)
+            tasks.append(asyncio.create_task(self.run_voice()))
+        try:
+            if self.args.duration:
+                await asyncio.sleep(self.args.duration)
+            else:
+                await asyncio.gather(*tasks)
+        finally:                                   # clean shutdown: close the video, save the agent audio
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self.ctrl.running = False
+            await asyncio.get_running_loop().run_in_executor(None, self.ctrl.stopped.wait, 5)
+            await runner.cleanup()
+            if self.args.record:
+                mux(self.args.record)
+
+
+def mux(mp4: str):
+    """demo.mp4 + demo.wav -> demo_av.mp4 (h264 + aac) if ffmpeg is around."""
+    import shutil
+    import subprocess
+    wav = mp4[:-4] + ".wav"
+    ff = shutil.which("ffmpeg")
+    if ff and Path(wav).exists():
+        out = mp4[:-4] + "_av.mp4"
+        subprocess.run([ff, "-y", "-loglevel", "error", "-i", mp4, "-i", wav, "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-crf", "20", "-c:a", "aac", "-shortest", out], check=False)
+        print("wrote", out, flush=True)
 
 
 def main():
@@ -250,6 +292,11 @@ def main():
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--in-device", type=int)
     ap.add_argument("--out-device", type=int)
+    ap.add_argument("--mic-wav", help="scripted user audio instead of the microphone")
+    ap.add_argument("--no-speaker", action="store_true")
+    ap.add_argument("--duration", type=float, help="run this many seconds, then shut down cleanly")
+    ap.add_argument("--record", help="write the demo view to this .mp4 (agent audio goes to <name>.wav)")
+    ap.add_argument("--log", help="append every UI event as JSON lines here")
     ap.add_argument("--real", action="store_true", help="mirror the sim onto the SO-101 (owner at the arm)")
     ap.add_argument("--port-name", dest="port_name", default="COM3")
     a = ap.parse_args()

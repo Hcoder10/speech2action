@@ -54,7 +54,8 @@ class Ring:
 class PersonaPlex:
     def __init__(self, url: str, text_prompt: str, voice: str = "NATF2.pt", seed: int = 42,
                  on_text=None, on_level=None, on_state=None, in_device=None, out_device=None,
-                 mic_gain: float = 1.0, duck: float = 0.35, volume: float = 1.0):
+                 mic_gain: float = 1.0, duck: float = 0.35, volume: float = 1.0, mic_wav: str | None = None,
+                 speaker: bool = True, record_audio: str | None = None, record_t0=None):
         sep = "&" if "?" in url else "?"
         self.url = f"{url}{sep}voice_prompt={quote(voice)}&text_prompt={quote(text_prompt)}&seed={seed}"
         self.on_text = on_text or (lambda s: None)
@@ -69,6 +70,16 @@ class PersonaPlex:
         self.agent_speaking_until = 0.0
         self.muted = False
         self._streams = []
+        self.speaker = speaker
+        self.record_audio, self.record_t0 = record_audio, record_t0 or (lambda: None)
+        self.rec_chunks: list = []                # (wall time, pcm) of the agent's voice, for the demo video
+        self.wav = None
+        if mic_wav:                               # scripted user turns instead of a microphone (tests, rehearsals)
+            import wave
+            with wave.open(mic_wav) as w:
+                x = np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768
+                self.wav = resample(x, w.getframerate(), MODEL_RATE)
+            self.wav_pos = 0
 
     # ------------------------------------------------------------------ audio devices
     def _start_audio(self):
@@ -93,13 +104,16 @@ class PersonaPlex:
             y = np.pad(y, (0, max(0, frames - y.size)))[:frames]
             outdata[:, 0] = np.clip(y * self.volume, -1, 1)
 
-        i = sd.InputStream(samplerate=in_rate, channels=1, dtype="float32", blocksize=in_rate // 50,
-                           device=self.in_device, callback=mic_cb)
-        o = sd.OutputStream(samplerate=DEV_RATE, channels=1, dtype="float32", blocksize=960,
-                            device=self.out_device, callback=spk_cb)
-        i.start(); o.start()
-        self._streams = [i, o]
-        return info["name"], sd.query_devices(o.device)["name"]
+        names = ["scripted wav", "none"]
+        if self.wav is None:
+            i = sd.InputStream(samplerate=in_rate, channels=1, dtype="float32", blocksize=in_rate // 50,
+                               device=self.in_device, callback=mic_cb)
+            i.start(); self._streams.append(i); names[0] = info["name"]
+        if self.speaker:
+            o = sd.OutputStream(samplerate=DEV_RATE, channels=1, dtype="float32", blocksize=960,
+                                device=self.out_device, callback=spk_cb)
+            o.start(); self._streams.append(o); names[1] = sd.query_devices(o.device)["name"]
+        return tuple(names)
 
     # ------------------------------------------------------------------ network
     async def run(self):
@@ -118,8 +132,15 @@ class PersonaPlex:
                 nxt = time.perf_counter()
                 while not self.stop.is_set():
                     nxt += 0.02
-                    enc.append_pcm(self.mic.pop(CHUNK))
-                    data = enc.read_bytes()
+                    if self.wav is not None:
+                        piece = self.wav[self.wav_pos:self.wav_pos + CHUNK]; self.wav_pos += CHUNK
+                        self.mic.push(np.pad(piece, (0, CHUNK - piece.size)))
+                        self.on_level("user", float(np.sqrt(np.mean(piece ** 2))) if piece.size else 0.0)
+                    if not self.speaker:
+                        self.spk.pop(CHUNK)                              # nobody listens: keep the queue drained
+                    data = enc.append_pcm(self.mic.pop(CHUNK))          # sphn >= 0.2 returns the bytes
+                    if data is None and hasattr(enc, "read_bytes"):        # sphn 0.1.x
+                        data = enc.read_bytes()
                     if data:
                         with contextlib.suppress(Exception):
                             await ws.send(b"\x01" + bytes(data))
@@ -132,13 +153,17 @@ class PersonaPlex:
                     kind, payload = msg[0], bytes(msg[1:])
                     if kind == 0x00:
                         self.ready.set()
+                        self.ready_t = time.perf_counter()
                         self.on_state(f"live (mic: {mic_name} | speaker: {spk_name})")
                     elif kind == 0x01:
-                        dec.append_bytes(payload)
-                        pcm = dec.read_pcm()
+                        pcm = dec.append_bytes(payload)                     # sphn >= 0.2 returns the pcm
+                        if pcm is None and hasattr(dec, "read_pcm"):
+                            pcm = dec.read_pcm()
                         if pcm is not None and len(pcm):
                             pcm = np.asarray(pcm, np.float32).reshape(-1)
                             self.spk.push(pcm)
+                            if self.record_audio:
+                                self.rec_chunks.append((time.perf_counter(), pcm))
                             lvl = float(np.sqrt(np.mean(pcm ** 2)))
                             self.on_level("agent", lvl)
                             if lvl > 0.01:
@@ -156,3 +181,25 @@ class PersonaPlex:
                     with contextlib.suppress(Exception):
                         s.stop(); s.close()
                 self.on_state("disconnected")
+                self._save_audio()
+
+    def _save_audio(self):
+        t0 = self.record_t0()
+        if not self.record_audio or not self.rec_chunks or t0 is None:
+            return
+        import wave
+        end = max(t for t, _ in self.rec_chunks) - t0 + 1
+        out = np.zeros(int(end * MODEL_RATE) + MODEL_RATE, np.float32)
+        pos = 0
+        for t, pcm in self.rec_chunks:                      # lay chunks on the wall clock, never overlapping
+            pos = max(pos, int((t - t0) * MODEL_RATE))
+            if pos >= 0:
+                out[pos:pos + pcm.size] = pcm[:max(0, out.size - pos)]
+            pos += pcm.size
+        if self.wav is not None:                            # mix the scripted user voice in too
+            u0 = int((self.ready_t - t0) * MODEL_RATE)
+            u = self.wav[max(0, -u0):]
+            out[max(0, u0):max(0, u0) + u.size] += 0.8 * u[:max(0, out.size - max(0, u0))]
+        with wave.open(self.record_audio, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(MODEL_RATE)
+            w.writeframes((np.clip(out, -1, 1) * 32767).astype(np.int16).tobytes())
