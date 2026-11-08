@@ -283,7 +283,7 @@ class Skills:
         roll = lambda: self.align_roll(self.obj(name)["yaw"])
         if self.status.holding and self.status.holding != name:     # changed its mind: put the first one back
             yield from self.place_at(self.origin.get(self.status.holding, self._tip))
-        yield from self._go(lambda: o() + [0, 0, 0.09], grip=OPEN, roll=roll, tol=0.02, phase="approach")
+        yield from self._go(lambda: o() + [0, 0, 0.06], grip=OPEN, roll=roll, tol=0.02, phase="approach")   # fingers can only point straight down below ~6 cm
         yield from self._go(lambda: np.r_[o()[:2], max(0.004, o()[2] - GRASP_DEPTH)], grip=OPEN, roll=roll, tol=0.008,
                             timeout=2.5, phase="descend")
         self.origin[name] = self.obj(name)["pos"].copy()

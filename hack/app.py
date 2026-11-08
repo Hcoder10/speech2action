@@ -145,6 +145,10 @@ class App:
         self.last_text_t = 0.0
         self.ctrl = Controller(args, self.emit_threadsafe)
         self.voice = None
+        self.probe = None
+        if args.hidden:
+            from .hidden.probe import HiddenProbe
+            self.probe = HiddenProbe()
 
     # ------------------------------------------------------------------ events to the UI
     def emit_threadsafe(self, msg: dict):
@@ -220,6 +224,21 @@ class App:
                         except Exception:
                             pass
 
+    def on_hidden(self, h, k):
+        """Every 80 ms: the probe reads PersonaPlex's hidden state; confident, sustained predictions act at once."""
+        for it in self.probe.push(h):
+            if it.obj:
+                self.parser.last_obj = it.obj
+            if it.kind in ("pick", "point", "place"):
+                self.parser.last_kind = it.kind
+            self.ctrl.intents.put((it, self.parser.last_obj))
+        if k % 2 == 0:
+            from .hidden.probe import CLASSES
+            p = self.probe.last_probs
+            top = np.argsort(p)[::-1][:4]
+            self.emit({"type": "hidden", "top": [[CLASSES[i], round(float(p[i]), 3)] for i in top],
+                       "threshold": self.probe.th})
+
     async def run_voice(self):
         from .voice import PersonaPlex
 
@@ -231,6 +250,7 @@ class App:
                 record_audio=(self.args.record[:-4] + ".wav") if self.args.record else None,
                 record_t0=lambda: getattr(self.ctrl, "record_t0", None),
                 speaker=not self.args.no_speaker)
+                on_hidden=self.on_hidden if self.probe is not None else None,
             try:
                 await self.voice.run()
             except Exception as e:
@@ -295,6 +315,7 @@ def main():
     ap.add_argument("--out-device", type=int)
     ap.add_argument("--mic-wav", help="scripted user audio instead of the microphone")
     ap.add_argument("--no-speaker", action="store_true")
+    ap.add_argument("--hidden", action="store_true", help="act on the hidden-state probe as well as the words")
     ap.add_argument("--duration", type=float, help="run this many seconds, then shut down cleanly")
     ap.add_argument("--record", help="write the demo view to this .mp4 (agent audio goes to <name>.wav)")
     ap.add_argument("--log", help="append every UI event as JSON lines here")

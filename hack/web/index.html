@@ -51,6 +51,12 @@
   .btns { display: flex; gap: 8px; flex-wrap: wrap; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
   .chip { font-size: 12px; padding: 4px 9px; border-radius: 999px; background: #1d222a; border: 1px solid var(--line); cursor: pointer; color: #c9ced8; }
+  .bar { display: grid; grid-template-columns: 110px 1fr 44px; gap: 8px; align-items: center; font-size: 13px; margin: 4px 0; }
+  .bar .track { height: 10px; background: #1d222a; border-radius: 6px; overflow: hidden; position: relative; }
+  .bar .fill { height: 100%; background: var(--blue); border-radius: 6px; transition: width .15s; }
+  .bar .fill.hot { background: var(--accent); }
+  .bar .th { position: absolute; top: -2px; bottom: -2px; width: 2px; background: #fff6; }
+  .src-hidden { color: var(--accent); font-size: 11px; margin-left: 6px; }
   .persona { font-size: 12px; color: var(--muted); max-height: 70px; overflow: auto; }
 </style>
 </head>
@@ -69,6 +75,10 @@
     <div class="card">
       <h3>Pip said → arm did</h3>
       <div class="transcript" id="transcript"></div>
+    </div>
+    <div class="card" id="hiddencard" style="display:none">
+      <h3>Pip's hidden state thinks you want…</h3>
+      <div id="bars"></div>
     </div>
     <div class="card log" id="logcard">
       <h3>Intents (word → motion latency)</h3>
@@ -127,8 +137,12 @@ function connect() {
     else if (m.type === 'intent') {
       markHit(m.text || '');
       const row = document.createElement('div'); row.className = 'row';
-      row.innerHTML = `<span class="kind ${m.kind}">${m.label}</span><span class="lat">${m.latency_ms} ms</span><span class="said">“${m.text}”</span>`;
+      const hid = (m.text || '').startsWith('[hidden');
+      row.innerHTML = `<span class="kind ${m.kind}">${m.label}${hid ? '<span class="src-hidden">from hidden state</span>' : ''}</span><span class="lat">${m.latency_ms} ms</span><span class="said">${hid ? m.text : '“' + m.text + '”'}</span>`;
       $('log').prepend(row);
+    } else if (m.type === 'hidden') {
+      $('hiddencard').style.display = '';
+      $('bars').innerHTML = m.top.map(([c, p]) => `<div class="bar"><span>${c}</span><span class="track"><span class="fill${p >= m.threshold && c !== 'none' ? ' hot' : ''}" style="width:${(p*100).toFixed(0)}%"></span><span class="th" style="left:${(m.threshold*100).toFixed(0)}%"></span></span><span>${(p*100).toFixed(0)}%</span></div>`).join('');
     } else if (m.type === 'event') {
       const row = document.createElement('div'); row.className = 'ev'; row.textContent = '● ' + m.text; $('log').prepend(row);
     } else if (m.type === 'status') {
