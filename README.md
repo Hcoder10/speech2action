@@ -1,3 +1,33 @@
+# Pip: talk to an SO-101, full duplex
+
+You talk to **PersonaPlex** (NVIDIA's full-duplex speech-to-speech model). It answers in its own voice, and what
+it *says* it is doing is what the arm does, starting while the sentence is still being spoken. Interrupt it,
+redirect it mid-reach ("no, the blue one"), nudge it ("a bit higher"), stop it. The arm runs a learned
+goal-conditioned action model (PPO, trained with the sim-to-real randomisation below) under a skill layer.
+
+```
+mic -> PersonaPlex -> voice                    hack/voice.py      websocket client (opus both ways, text stream)
+            | its own words, ~12.5 Hz
+            v
+       hack/intent.py    streaming parser, fires mid-sentence (~0.03 ms/token, no LLM in the loop)
+       hack/skills.py    pick / place / point / nudge / wave / nod / dance / home / stop / resume, all interruptible
+       hack/action_model learned reacher (numpy inference)  | IK fallback with the same interface
+       hack/scene.py     calibrated SO-101 sim + 3 cubes + bowl   (--real mirrors it onto the arm)
+       hack/app.py       30 Hz control thread + web UI at http://localhost:8080
+```
+
+```
+python -m hack.app --no-voice                       # sim + UI; type what Pip would say
+python -m hack.app --model rl                       # with PersonaPlex at ws://127.0.0.1:8998/api/chat (ssh tunnel)
+python -m hack.app --model rl --real                # also drive the real arm (owner at the arm; runs/STOP aborts)
+python -m hack.sim_script --model rl --video x.mp4  # headless scripted conversation
+```
+
+Measured in sim (36 picks over 12 random layouts, servo/latency randomisation on): IK fallback 34/36 grasps,
+learned model v1 32/36. Word-to-motion latency inside the app: ~25 ms (one control tick).
+
+---
+
 # so101-sim2real
 
 A MuJoCo + Gymnasium environment for the owner's SO-101 follower arm. It is built so a policy trained in the sim

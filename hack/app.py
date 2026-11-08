@@ -72,6 +72,13 @@ class Controller(threading.Thread):
         kin = Kinematics()
         sk = Skills(self.make_ctrl(kin), kin)
         self.objects = env.objects()
+        arm = None
+        if a.real:                       # mirror the sim's joint goals onto the physical SO-101
+            from so101_sim2real.hw import Arm
+            arm = Arm(a.port_name, allow_motion=True, stop_file=Path("runs") / "STOP")
+            start = arm.read()
+            print("real arm connected at", np.round(start, 1).tolist(), flush=True)
+            arm.move_to(np.asarray(obs["prev_goal"], float), speed_deg_s=15.0)
         self.ready.set()
         period, tick = 1 / 30, time.perf_counter()
         last_status = 0.0
@@ -89,6 +96,14 @@ class Controller(threading.Thread):
                 self.emit({"type": "intent", "kind": it.kind, "label": str(it), "text": it.text,
                            "latency_ms": round((time.perf_counter() - it.t) * 1000, 1)})
             obs, *_ = env.step(sk.tick(obs, env.objects()))
+            if arm is not None:
+                if arm.stop_requested():
+                    arm.hold(); arm = None
+                    self.emit({"type": "event", "text": "real arm: STOP file, holding"})
+                else:
+                    meas = arm.read()
+                    goal = np.clip(obs["prev_goal"], meas - 10, meas + 10)     # LeRobot-style relative clamp
+                    arm.write(goal)
             for e in sk.events:
                 self.emit({"type": "event", "text": e})
             sk.events.clear()
@@ -235,6 +250,8 @@ def main():
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--in-device", type=int)
     ap.add_argument("--out-device", type=int)
+    ap.add_argument("--real", action="store_true", help="mirror the sim onto the SO-101 (owner at the arm)")
+    ap.add_argument("--port-name", dest="port_name", default="COM3")
     a = ap.parse_args()
     asyncio.run(App(a).main())
 

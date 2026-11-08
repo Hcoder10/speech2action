@@ -17,6 +17,7 @@
   @media (max-width: 1000px) { .wrap { grid-template-columns: 1fr; height: auto; } }
   .stage { position: relative; background: #000; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); min-height: 300px; }
   .stage img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .stage img:not([src]) { visibility: hidden; }
   .hud { position: absolute; left: 16px; top: 16px; right: 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .pill { background: rgba(13,15,18,.78); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,.08);
           border-radius: 999px; padding: 6px 14px; font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: center; }
